@@ -7,6 +7,7 @@ from datetime import datetime
 import os
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +76,7 @@ def fetch_quote(nse: NSE, symbol: str) -> dict[str, Any]:
 
 def get_stock_data(nse: NSE, symbol: str) -> dict[str, Any] | None:
     max_retries = 2
-    base_delay = 1.0
+    base_delay = 0.5
     last_error: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
@@ -262,16 +263,22 @@ def main():
     print("\nNSE Stock Data Fetcher - Multiple Stocks")
 
     results = []
-    with NSE(download_folder=Path.cwd(), server=False, timeout=20) as nse:
-        for i, symbol in enumerate(stocks):
-            data = get_stock_data(nse, symbol)
-            if data:
-                element_int = int(data['market_cap'] / 10_000_000) if data['market_cap'] else 0
-                results.append({'stock': symbol, 'element_int': element_int, 'delivery': data['delivery_percentage']})
-                print(f"{symbol}: Market Cap = Rs {data['market_cap_cr']:,.2f} Cr, Delivery % = {data['delivery_percentage']:.2f}%")
-            # Small delay between requests to avoid NSE rate limiting
-            if i < len(stocks) - 1:
-                time.sleep(0.3)
+    with NSE(download_folder=Path.cwd(), server=False, timeout=15) as nse:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_symbol = {
+                executor.submit(get_stock_data, nse, symbol): symbol for symbol in stocks
+            }
+            for future in as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    data = future.result()
+                except Exception as e:
+                    print(f"Failed to fetch {symbol}: {e}")
+                    data = None
+                if data:
+                    element_int = int(data['market_cap'] / 10_000_000) if data['market_cap'] else 0
+                    results.append({'stock': symbol, 'element_int': element_int, 'delivery': data['delivery_percentage']})
+                    print(f"{symbol}: Market Cap = Rs {data['market_cap_cr']:,.2f} Cr, Delivery % = {data['delivery_percentage']:.2f}%")
 
     # Sort and rank by market cap descending
     sorted_results = sorted(results, key=lambda x: x.get('element_int', 0) if x.get('element_int') else 0, reverse=True)
