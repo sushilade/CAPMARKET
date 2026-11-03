@@ -80,7 +80,7 @@ def get_stock_data(nse: NSE, symbol: str) -> dict[str, Any] | None:
 
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"Fetching {symbol} data from NSE... (attempt {attempt}/{max_retries})")
+            print(f"Fetching {symbol} data from NSE...")
             quote = fetch_quote(nse, symbol)
 
             if not quote:
