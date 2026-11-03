@@ -6,6 +6,7 @@ Handles NSE's session requirements automatically
 from datetime import datetime
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -73,63 +74,75 @@ def fetch_quote(nse: NSE, symbol: str) -> dict[str, Any]:
 
 
 def get_stock_data(nse: NSE, symbol: str) -> dict[str, Any] | None:
-    try:
-        print(f"Fetching {symbol} data from NSE...")
-        quote = fetch_quote(nse, symbol)
+    max_retries = 3
+    base_delay = 2.0
+    last_error: Exception | None = None
 
-        if not quote:
-            print(f"NSE returned an empty response for {symbol}.")
-            return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Fetching {symbol} data from NSE... (attempt {attempt}/{max_retries})")
+            quote = fetch_quote(nse, symbol)
 
-        meta = quote.get("metaData", {})
-        trade = quote.get("tradeInfo", {})
-        sec = quote.get("secInfo", {})
+            if not quote:
+                print(f"NSE returned an empty response for {symbol}.")
+                return None
 
-        last_price = to_float(
-            first_value(
-                trade.get("lastPrice"),
-                quote.get("lastPrice"),
-                meta.get("closePrice"),
-                meta.get("lastPrice"),
-                default=0,
+            meta = quote.get("metaData", {})
+            trade = quote.get("tradeInfo", {})
+            sec = quote.get("secInfo", {})
+
+            last_price = to_float(
+                first_value(
+                    trade.get("lastPrice"),
+                    quote.get("lastPrice"),
+                    meta.get("closePrice"),
+                    meta.get("lastPrice"),
+                    default=0,
+                )
             )
-        )
 
-        change = to_float(meta.get("change", 0))
-        percentage_change = to_float(meta.get("pChange", 0))
-        market_cap = to_float(trade.get("totalMarketCap", 0))
-        volume_traded = to_int(first_value(trade.get("totalTradedVolume"), trade.get("quantitytraded")))
-        delivery_quantity = to_int(first_value(sec.get("deliveryQuantity"), trade.get("deliveryquantity")))
-        delivery_percentage = to_float(
-            first_value(
-                trade.get("deliveryToTradedQuantity"),
-                sec.get("deliveryTotradedQuantity"),
-                default=0,
+            change = to_float(meta.get("change", 0))
+            percentage_change = to_float(meta.get("pChange", 0))
+            market_cap = to_float(trade.get("totalMarketCap", 0))
+            volume_traded = to_int(first_value(trade.get("totalTradedVolume"), trade.get("quantitytraded")))
+            delivery_quantity = to_int(first_value(sec.get("deliveryQuantity"), trade.get("deliveryquantity")))
+            delivery_percentage = to_float(
+                first_value(
+                    trade.get("deliveryToTradedQuantity"),
+                    sec.get("deliveryTotradedQuantity"),
+                    default=0,
+                )
             )
-        )
 
-        return {
-            "symbol": symbol,
-            "company_name": meta.get("companyName", symbol),
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "last_price": last_price,
-            "change": change,
-            "percentage_change": percentage_change,
-            "market_cap": market_cap,
-            "market_cap_cr": round(market_cap / 10_000_000, 2) if market_cap else 0,
-            "volume_traded": volume_traded,
-            "delivery_quantity": delivery_quantity,
-            "delivery_percentage": delivery_percentage,
-            "open": to_float(meta.get("open", 0)),
-            "high": to_float(meta.get("dayHigh", 0)),
-            "low": to_float(meta.get("dayLow", 0)),
-            "previous_close": to_float(meta.get("previousClose", 0)),
-            "last_update_time": quote.get("lastUpdateTime"),
-        }
+            return {
+                "symbol": symbol,
+                "company_name": meta.get("companyName", symbol),
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_price": last_price,
+                "change": change,
+                "percentage_change": percentage_change,
+                "market_cap": market_cap,
+                "market_cap_cr": round(market_cap / 10_000_000, 2) if market_cap else 0,
+                "volume_traded": volume_traded,
+                "delivery_quantity": delivery_quantity,
+                "delivery_percentage": delivery_percentage,
+                "open": to_float(meta.get("open", 0)),
+                "high": to_float(meta.get("dayHigh", 0)),
+                "low": to_float(meta.get("dayLow", 0)),
+                "previous_close": to_float(meta.get("previousClose", 0)),
+                "last_update_time": quote.get("lastUpdateTime"),
+            }
 
-    except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
-        return None
+        except Exception as e:
+            last_error = e
+            print(f"Error fetching {symbol} (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                print(f"Retrying {symbol} in {delay:.1f}s...")
+                time.sleep(delay)
+
+    print(f"Failed to fetch {symbol} after {max_retries} attempts: {last_error}")
+    return None
 
 
 def display_stock(data: dict[str, Any]):
@@ -250,12 +263,15 @@ def main():
 
     results = []
     with NSE(download_folder=Path.cwd(), server=False, timeout=20) as nse:
-        for symbol in stocks:
+        for i, symbol in enumerate(stocks):
             data = get_stock_data(nse, symbol)
             if data:
                 element_int = int(data['market_cap'] / 10_000_000) if data['market_cap'] else 0
                 results.append({'stock': symbol, 'element_int': element_int, 'delivery': data['delivery_percentage']})
                 print(f"{symbol}: Market Cap = Rs {data['market_cap_cr']:,.2f} Cr, Delivery % = {data['delivery_percentage']:.2f}%")
+            # Small delay between requests to avoid NSE rate limiting
+            if i < len(stocks) - 1:
+                time.sleep(1.0)
 
     # Sort and rank by market cap descending
     sorted_results = sorted(results, key=lambda x: x.get('element_int', 0) if x.get('element_int') else 0, reverse=True)
