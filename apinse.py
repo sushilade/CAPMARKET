@@ -74,8 +74,8 @@ def fetch_quote(nse: NSE, symbol: str) -> dict[str, Any]:
 
 
 def get_stock_data(nse: NSE, symbol: str) -> dict[str, Any] | None:
-    max_retries = 3
-    base_delay = 2.0
+    max_retries = 2
+    base_delay = 1.0
     last_error: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
@@ -271,7 +271,7 @@ def main():
                 print(f"{symbol}: Market Cap = Rs {data['market_cap_cr']:,.2f} Cr, Delivery % = {data['delivery_percentage']:.2f}%")
             # Small delay between requests to avoid NSE rate limiting
             if i < len(stocks) - 1:
-                time.sleep(1.0)
+                time.sleep(0.3)
 
     # Sort and rank by market cap descending
     sorted_results = sorted(results, key=lambda x: x.get('element_int', 0) if x.get('element_int') else 0, reverse=True)
